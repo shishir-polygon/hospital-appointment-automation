@@ -90,33 +90,30 @@ class ConversationManager:
         if not session.messages:
             session.language = await self.groq.detect_language(user_text)
 
-        # Detect intent on greeting/first turn (8B model — fast, low quota cost)
+        # Combined single LLM call: detect intent + extract fields in one request
+        # This reduces API usage from 3 calls/turn to 2 calls/turn (or 1 on repeat turns)
         if session.stage in (BookingStage.GREETING, BookingStage.INTENT_DETECTION):
-            intent_result = await self.groq.detect_intent(user_text)
+            combined = await self.groq.detect_intent_and_extract(user_text, session)
             try:
-                session.intent = ConversationIntent(intent_result.get("intent", "general_inquiry"))
+                session.intent = ConversationIntent(combined.get("intent", "general_inquiry"))
             except ValueError:
                 session.intent = ConversationIntent.GENERAL_INQUIRY
-            if intent_result.get("language"):
-                session.language = intent_result["language"]
+            if combined.get("language"):
+                session.language = combined["language"]
+            # Apply extracted fields from the same call
+            self._apply_extracted_fields(session, combined.get("fields", {}))
+        elif session.intent in (ConversationIntent.BOOK_APPOINTMENT,
+                                ConversationIntent.DOCTOR_INFO,
+                                ConversationIntent.CHECK_QUEUE):
+            # Subsequent turns: only extract fields (no intent detection needed)
+            extracted = await self.groq.extract_booking_fields(session, user_text)
+            self._apply_extracted_fields(session, extracted)
 
         # Advance stage
         if session.stage == BookingStage.GREETING:
             session.stage = BookingStage.INTENT_DETECTION
         elif session.stage == BookingStage.INTENT_DETECTION:
             session.stage = self._next_stage_for_intent(session.intent)
-
-        # Always extract booking fields when intent is booking-related.
-        # This MUST run on every turn (including turn 1) so doctor name/date from
-        # the first message are captured — without this the stage never advances.
-        if session.intent in (ConversationIntent.BOOK_APPOINTMENT,
-                              ConversationIntent.DOCTOR_INFO,
-                              ConversationIntent.CHECK_QUEUE):
-            extracted = await self.groq.extract_booking_fields(session, user_text)
-            self._apply_extracted_fields(session, extracted)
-
-        import asyncio
-        await asyncio.sleep(1)  # brief pause between Groq calls
 
         # Fetch real-time context from DB — may resolve doctor_id from name lookup
         context_data = await self._fetch_context(session)

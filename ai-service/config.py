@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     database_url: str = "host=postgres port=5432 dbname=ai_doctor user=postgres password=secret"
 
     # Groq model config
-    # 70B for response generation (quality), 8B for intent/extraction (higher RPD limit)
-    llm_model: str = "llama-3.3-70b-versatile"
+    # Use 8B as primary (14,400 RPD free tier vs 1,000 RPD for 70B)
+    # Switch llm_model to llama-3.3-70b-versatile when on paid tier
+    llm_model: str = "llama-3.1-8b-instant"
     llm_fast_model: str = "llama-3.1-8b-instant"
     stt_model: str = "whisper-large-v3"
 

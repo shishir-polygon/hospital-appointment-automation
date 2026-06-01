@@ -2,6 +2,33 @@ import asyncio
 import io
 import json
 import structlog
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Extract the first complete JSON object from text using brace counting."""
+    depth, start = 0, None
+    in_string, escape = False, False
+    for i, c in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if c == '\\' and in_string:
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start:i + 1]
+    return None
 from groq import AsyncGroq, RateLimitError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
 from langdetect import detect
@@ -70,6 +97,59 @@ class GroqService:
         )
         return transcription.strip()
 
+    async def detect_intent_and_extract(self, user_message: str, session) -> dict:
+        """Single LLM call that detects intent AND extracts booking fields together.
+        Saves one API call per first turn vs calling detect_intent + extract_booking_fields separately."""
+        import datetime
+        today = datetime.date.today()
+        tomorrow = (today + datetime.timedelta(days=1)).isoformat()
+        day_after = (today + datetime.timedelta(days=2)).isoformat()
+
+        prompt = f"""Analyze this patient message and return a single JSON object with these keys:
+
+"intent": one of: book_appointment | check_queue | doctor_info | reschedule | cancel | general_inquiry
+"language": bn | en | hi | ar
+"fields": {{
+  "doctor_name": string or null,
+  "department": string or null,
+  "preferred_date": YYYY-MM-DD or MONDAY/TUESDAY/WEDNESDAY/THURSDAY/FRIDAY/SATURDAY/SUNDAY or null,
+  "preferred_time": HH:MM or null,
+  "patient_name": string or null,
+  "patient_mobile": string or null,
+  "patient_age": integer or null,
+  "patient_gender": "male" | "female" | null
+}}
+
+Date rules: আগামীকাল/tomorrow={tomorrow}, পরশু/day-after={day_after}, আজ/today={today.isoformat()}
+Day names: সোমবার→MONDAY, মঙ্গলবার→TUESDAY, বুধবার→WEDNESDAY, বৃহস্পতিবার→THURSDAY, শুক্রবার→FRIDAY, শনিবার→SATURDAY, রবিবার→SUNDAY
+Time: সকালে/morning→09:00, দুপুরে→12:00, বিকেলে→15:00, সন্ধ্যায়→18:00
+Gender: পুরুষ/male/man→male, মহিলা/female/woman→female
+Strip honorifics (স্যার/ডাঃ/Dr.) from doctor_name.
+Return ONLY raw JSON, no markdown.
+
+Patient message: "{user_message}"
+Today: {today.isoformat()}"""
+
+        try:
+            resp = await self.client.chat.completions.create(
+                model=settings.llm_fast_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=300,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip markdown fences
+            if "```" in raw:
+                raw = raw.split("```")[1].lstrip("json").strip()
+            # Extract the outermost JSON object using brace counting
+            json_str = _extract_json_object(raw)
+            return json.loads(json_str or raw)
+        except RateLimitError:
+            raise
+        except Exception as e:
+            logger.warning("detect_intent_and_extract_failed", error=str(e))
+            return {"intent": "general_inquiry", "language": session.language or "bn", "fields": {}}
+
     async def detect_intent(self, user_message: str) -> dict:
         """Detect patient intent from their message."""
         try:
@@ -113,7 +193,7 @@ class GroqService:
         try:
             return await self._generate_response(session, context_data, user_message)
         except RateLimitError:
-            logger.warning("groq_rate_limit_70b — falling back to 8B model")
+            logger.warning("groq_rate_limit_primary — falling back to fast model")
             # Fall back to the faster 8B model when 70B is rate-limited
             try:
                 return await self._generate_response(session, context_data, user_message, model_override=settings.llm_fast_model)
