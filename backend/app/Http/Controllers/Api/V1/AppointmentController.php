@@ -18,7 +18,8 @@ class AppointmentController extends Controller
     {
         $user = auth()->user();
         $query = Appointment::with(['doctor', 'patient', 'hospital'])
-            ->when(!$user->isSuperAdmin(), fn($q) => $q->where('hospital_id', $user->hospital_id));
+            ->when(!$user->isSuperAdmin(), fn($q) => $q->where('hospital_id', $user->hospital_id))
+            ->when($user->isSuperAdmin() && $request->hospital_id, fn($q) => $q->where('hospital_id', $request->hospital_id));
 
         if ($request->date) {
             $query->whereDate('appointment_date', $request->date);
@@ -53,7 +54,10 @@ class AppointmentController extends Controller
 
         return DB::transaction(function () use ($data) {
             $doctor = Doctor::findOrFail($data['doctor_id']);
-            $hospitalId = auth()->user()?->hospital_id ?? $doctor->hospital_id;
+            $user = auth()->user();
+            $hospitalId = ($user->isSuperAdmin() || !$user->hospital_id)
+                ? $doctor->hospital_id
+                : $user->hospital_id;
 
             $patient = Patient::firstOrCreate(
                 ['hospital_id' => $hospitalId, 'phone' => $data['patient_mobile']],
@@ -123,11 +127,16 @@ class AppointmentController extends Controller
     public function todayStats(Request $request): JsonResponse
     {
         $user = auth()->user();
-        $hospitalId = $user->hospital_id;
         $today = Carbon::today();
 
-        $stats = Appointment::where('hospital_id', $hospitalId)
-            ->whereDate('appointment_date', $today)
+        $query = Appointment::whereDate('appointment_date', $today);
+
+        // Super admin sees all hospitals; hospital admin sees only their own
+        if (!$user->isSuperAdmin()) {
+            $query->where('hospital_id', $user->hospital_id);
+        }
+
+        $stats = $query
             ->selectRaw("
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,

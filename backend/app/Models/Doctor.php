@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Carbon\Carbon;
 
@@ -27,6 +28,14 @@ class Doctor extends Model
     public function hospital(): BelongsTo
     {
         return $this->belongsTo(Hospital::class);
+    }
+
+    // All hospitals this doctor works at (via pivot)
+    public function hospitals(): BelongsToMany
+    {
+        return $this->belongsToMany(Hospital::class, 'doctor_hospitals')
+            ->withPivot(['department_id', 'consultation_fee', 'is_active'])
+            ->withTimestamps();
     }
 
     public function department(): BelongsTo

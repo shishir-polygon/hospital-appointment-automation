@@ -47,6 +47,8 @@ Route::prefix('v1')->middleware('auth:api')->group(function () {
         Route::post('doctors', [DoctorController::class, 'store']);
         Route::put('doctors/{doctor}', [DoctorController::class, 'update']);
         Route::post('doctors/{doctor}/holidays', [DoctorController::class, 'addHoliday']);
+        Route::post('doctors/{doctor}/hospitals', [DoctorController::class, 'attachHospital']);
+        Route::delete('doctors/{doctor}/hospitals/{hospital}', [DoctorController::class, 'detachHospital']);
     });
 
     // Appointments

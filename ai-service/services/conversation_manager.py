@@ -90,7 +90,7 @@ class ConversationManager:
         if not session.messages:
             session.language = await self.groq.detect_language(user_text)
 
-        # First turn: detect intent (1 Groq call) and also extract fields in same pass
+        # Detect intent on greeting/first turn (8B model — fast, low quota cost)
         if session.stage in (BookingStage.GREETING, BookingStage.INTENT_DETECTION):
             intent_result = await self.groq.detect_intent(user_text)
             try:
@@ -100,24 +100,23 @@ class ConversationManager:
             if intent_result.get("language"):
                 session.language = intent_result["language"]
 
-        # Advance stage based on intent
+        # Advance stage
         if session.stage == BookingStage.GREETING:
             session.stage = BookingStage.INTENT_DETECTION
         elif session.stage == BookingStage.INTENT_DETECTION:
             session.stage = self._next_stage_for_intent(session.intent)
 
-        # Extract booking fields — skip on intent_detection stage (handled by generate_response)
-        # Only call on subsequent turns to save API quota
-        if (session.intent in (ConversationIntent.BOOK_APPOINTMENT,
-                               ConversationIntent.DOCTOR_INFO,
-                               ConversationIntent.CHECK_QUEUE)
-                and session.stage not in (BookingStage.GREETING, BookingStage.INTENT_DETECTION)):
+        # Always extract booking fields when intent is booking-related.
+        # This MUST run on every turn (including turn 1) so doctor name/date from
+        # the first message are captured — without this the stage never advances.
+        if session.intent in (ConversationIntent.BOOK_APPOINTMENT,
+                              ConversationIntent.DOCTOR_INFO,
+                              ConversationIntent.CHECK_QUEUE):
             extracted = await self.groq.extract_booking_fields(session, user_text)
             self._apply_extracted_fields(session, extracted)
 
-        # Small pause between Groq calls to stay within free-tier RPM
         import asyncio
-        await asyncio.sleep(1)
+        await asyncio.sleep(1)  # brief pause between Groq calls
 
         # Fetch real-time context from DB — may resolve doctor_id from name lookup
         context_data = await self._fetch_context(session)
@@ -277,7 +276,7 @@ class ConversationManager:
         if extracted.get("department"):
             bd.department = extracted["department"]
         if extracted.get("preferred_date"):
-            bd.preferred_date = extracted["preferred_date"]
+            bd.preferred_date = self._resolve_date(extracted["preferred_date"])
         if extracted.get("preferred_time"):
             bd.preferred_time = extracted["preferred_time"]
         if extracted.get("patient_name"):
@@ -288,6 +287,41 @@ class ConversationManager:
             bd.patient.age = extracted["patient_age"]
         if extracted.get("patient_gender"):
             bd.patient.gender = extracted["patient_gender"]
+
+    def _resolve_date(self, date_str: str) -> str:
+        """Resolve weekday names and invalid dates to ISO YYYY-MM-DD strings."""
+        import datetime
+        if not date_str:
+            return date_str
+
+        # Already a valid ISO date
+        try:
+            datetime.date.fromisoformat(date_str)
+            return date_str
+        except ValueError:
+            pass
+
+        # Map weekday names (Bengali and English) to Python weekday numbers (Mon=0)
+        WEEKDAY_MAP = {
+            "monday": 0, "সোমবার": 0,
+            "tuesday": 1, "মঙ্গলবার": 1,
+            "wednesday": 2, "বুধবার": 2,
+            "thursday": 3, "বৃহস্পতিবার": 3,
+            "friday": 4, "শুক্রবার": 4,
+            "saturday": 5, "শনিবার": 5,
+            "sunday": 6, "রবিবার": 6,
+        }
+        key = date_str.strip().lower()
+        if key in WEEKDAY_MAP:
+            today = datetime.date.today()
+            target_weekday = WEEKDAY_MAP[key]
+            days_ahead = (target_weekday - today.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7  # always go to NEXT occurrence
+            return (today + datetime.timedelta(days=days_ahead)).isoformat()
+
+        # Return as-is if unrecognised (LLM may have put a natural language string)
+        return date_str
 
     def _patient_confirmed(self, text: str, language: str) -> bool:
         text_lower = text.lower().strip()

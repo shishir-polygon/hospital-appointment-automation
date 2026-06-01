@@ -224,14 +224,23 @@ class TextTurnResponse(BaseModel):
 
 @app.post("/api/conversation/turn", response_model=TextTurnResponse)
 async def text_conversation_turn(body: TextTurnRequest):
-    """Text-only conversation turn (for testing without mic)."""
+    """Text-only conversation turn."""
+    import asyncio
     manager = get_manager()
-    ai_text = await manager.process_turn(
-        call_sid=body.session_id,
-        user_text=body.message,
-        caller_number=body.caller_number,
-        hospital_id=body.hospital_id,
-    )
+    try:
+        ai_text = await asyncio.wait_for(
+            manager.process_turn(
+                call_sid=body.session_id,
+                user_text=body.message,
+                caller_number=body.caller_number,
+                hospital_id=body.hospital_id,
+            ),
+            timeout=28,  # return before browser times out
+        )
+    except asyncio.TimeoutError:
+        ai_text = {"bn": "দুঃখিত, সার্ভার ব্যস্ত। একটু পরে আবার চেষ্টা করুন।",
+                   "en": "Sorry, the server is busy. Please try again in a moment."}.get(
+            (await manager.get_or_create_session(body.session_id, body.caller_number, body.hospital_id)).language, "Please try again.")
     session = await manager.get_or_create_session(body.session_id, body.caller_number, body.hospital_id)
     audio_bytes = await tts_service.synthesize(ai_text, session.language)
 

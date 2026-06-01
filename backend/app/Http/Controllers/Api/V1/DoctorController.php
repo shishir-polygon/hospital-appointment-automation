@@ -15,12 +15,17 @@ class DoctorController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = auth()->user();
-        $query = Doctor::with(['department', 'schedules']);
 
-        if (!$user->isSuperAdmin()) {
-            $query->where('hospital_id', $user->hospital_id);
-        } elseif ($request->hospital_id) {
-            $query->where('hospital_id', $request->hospital_id);
+        // Filter by hospital via the doctor_hospitals pivot (supports multi-hospital doctors)
+        $hospitalId = $user->isSuperAdmin()
+            ? ($request->hospital_id ?: null)
+            : $user->hospital_id;
+
+        $query = Doctor::with(['department', 'schedules', 'hospitals']);
+
+        if ($hospitalId) {
+            $query->whereHas('hospitals', fn($q) => $q->where('hospitals.id', $hospitalId)
+                ->where('doctor_hospitals.is_active', true));
         }
 
         if ($request->search) {
@@ -91,6 +96,29 @@ class DoctorController extends Controller
         ]);
         $doctor->update($data);
         return response()->json($doctor->fresh(['department', 'schedules']));
+    }
+
+    public function attachHospital(Request $request, Doctor $doctor): JsonResponse
+    {
+        $data = $request->validate([
+            'hospital_id'      => 'required|exists:hospitals,id',
+            'department_id'    => 'nullable|exists:departments,id',
+            'consultation_fee' => 'nullable|numeric|min:0',
+        ]);
+        $doctor->hospitals()->syncWithoutDetaching([
+            $data['hospital_id'] => [
+                'department_id'    => $data['department_id'] ?? null,
+                'consultation_fee' => $data['consultation_fee'] ?? $doctor->consultation_fee,
+                'is_active'        => true,
+            ],
+        ]);
+        return response()->json($doctor->load('hospitals'));
+    }
+
+    public function detachHospital(Doctor $doctor, int $hospital): JsonResponse
+    {
+        $doctor->hospitals()->detach($hospital);
+        return response()->json(['detached' => true]);
     }
 
     public function queue(Doctor $doctor): JsonResponse

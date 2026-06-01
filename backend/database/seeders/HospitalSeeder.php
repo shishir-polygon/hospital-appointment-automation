@@ -237,7 +237,54 @@ class HospitalSeeder extends Seeder
                 );
             }
 
+            // Populate doctor_hospitals pivot (primary assignment)
+            $doctor->hospitals()->syncWithoutDetaching([
+                $hId => [
+                    'department_id'    => $deptId,
+                    'consultation_fee' => $data['fee'],
+                    'is_active'        => true,
+                ],
+            ]);
+
             $this->command->info("  Doctor: {$data['title']} {$data['name']}");
+        }
+
+        // ── Cross-hospital assignments (demonstrate many-to-many) ────────────
+        // ডাঃ আনোয়ার হোসেন also consults at স্কয়ার হাসপাতাল on weekends
+        $anwar  = Doctor::where('name', 'মোহাম্মদ আনোয়ার হোসেন')->first();
+        $square = $hospitalIds['square-hospital'];
+        if ($anwar) {
+            $anwar->hospitals()->syncWithoutDetaching([
+                $square => [
+                    'department_id'    => $deptIds[$square]['হৃদরোগ বিভাগ'] ?? null,
+                    'consultation_fee' => 1800,
+                    'is_active'        => true,
+                ],
+            ]);
+            // Weekend schedule at Square
+            DoctorSchedule::firstOrCreate(
+                ['doctor_id' => $anwar->id, 'day_of_week' => 5], // Friday
+                ['start_time' => '15:00', 'end_time' => '18:00', 'max_patients' => 10, 'is_active' => true]
+            );
+            $this->command->info("  Cross-hospital: আনোয়ার হোসেন → স্কয়ার হাসপাতাল");
+        }
+
+        // ডাঃ নাসরিন আক্তার also consults at ঢাকা মেডিকেল on Sundays
+        $nasrin = Doctor::where('name', 'নাসরিন আক্তার')->first();
+        $dhaka  = $hospitalIds['dhaka-medical'];
+        if ($nasrin) {
+            $nasrin->hospitals()->syncWithoutDetaching([
+                $dhaka => [
+                    'department_id'    => $deptIds[$dhaka]['ডায়াবেটিস ও মেডিসিন বিভাগ'] ?? null,
+                    'consultation_fee' => 1000,
+                    'is_active'        => true,
+                ],
+            ]);
+            DoctorSchedule::firstOrCreate(
+                ['doctor_id' => $nasrin->id, 'day_of_week' => 6], // Saturday
+                ['start_time' => '10:00', 'end_time' => '13:00', 'max_patients' => 15, 'is_active' => true]
+            );
+            $this->command->info("  Cross-hospital: নাসরিন আক্তার → ঢাকা মেডিকেল");
         }
 
         $this->command->info('Hospital seeding complete.');

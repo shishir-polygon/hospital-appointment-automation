@@ -50,7 +50,7 @@ class GroqService:
             return await self._transcribe_audio(audio_data, language)
         except RateLimitError:
             logger.warning("groq_rate_limit_stt")
-            await asyncio.sleep(20)
+            await asyncio.sleep(8)
             try:
                 return await self._transcribe_audio(audio_data, language)
             except Exception:
@@ -109,28 +109,33 @@ class GroqService:
         context_data: dict,
         user_message: str,
     ) -> str:
-        """Generate AI receptionist response using Groq LLM."""
+        """Generate AI receptionist response — 70B primary, 8B fallback on rate limit."""
         try:
             return await self._generate_response(session, context_data, user_message)
         except RateLimitError:
-            logger.warning("groq_rate_limit_llm — waiting 20s")
-            await asyncio.sleep(20)
+            logger.warning("groq_rate_limit_70b — falling back to 8B model")
+            # Fall back to the faster 8B model when 70B is rate-limited
             try:
-                return await self._generate_response(session, context_data, user_message)
+                return await self._generate_response(session, context_data, user_message, model_override=settings.llm_fast_model)
             except RateLimitError:
-                msgs = {
-                    "bn": "দুঃখিত, এই মুহূর্তে AI সার্ভার ব্যস্ত আছে। একটু পরে আবার চেষ্টা করুন।",
-                    "en": "Sorry, the AI server is busy right now. Please try again in a moment.",
-                    "hi": "क्षमा करें, AI सर्वर अभी व्यस्त है। कृपया थोड़ी देर बाद पुनः प्रयास करें।",
-                }
-                return msgs.get(session.language, msgs["en"])
+                await asyncio.sleep(8)
+                try:
+                    return await self._generate_response(session, context_data, user_message, model_override=settings.llm_fast_model)
+                except Exception:
+                    msgs = {
+                        "bn": "দুঃখিত, সার্ভার ব্যস্ত। একটু পরে আবার চেষ্টা করুন।",
+                        "en": "Sorry, the server is busy. Please try again in a moment.",
+                        "hi": "क्षमा करें, सर्वर व्यस्त है। कृपया पुनः प्रयास करें।",
+                    }
+                    return msgs.get(session.language, msgs["en"])
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=5, max=20), retry=retry_if_not_exception_type(RateLimitError))
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=3, max=10), retry=retry_if_not_exception_type(RateLimitError))
     async def _generate_response(
         self,
         session: ConversationSession,
         context_data: dict,
         user_message: str,
+        model_override: str | None = None,
     ) -> str:
         """Internal generate — retries on transient errors, not rate limits."""
         context_str = json.dumps(context_data, ensure_ascii=False, indent=2)
@@ -167,7 +172,7 @@ Stage-specific instructions:
         messages.append({"role": "user", "content": user_message})
 
         response = await self.client.chat.completions.create(
-            model=settings.llm_model,
+            model=model_override or settings.llm_model,
             messages=messages,
             temperature=0.7,
             max_tokens=200,
@@ -179,7 +184,7 @@ Stage-specific instructions:
         try:
             return await self._extract_booking_fields(session, user_message)
         except RateLimitError:
-            await asyncio.sleep(15)
+            await asyncio.sleep(8)
             try:
                 return await self._extract_booking_fields(session, user_message)
             except Exception:
@@ -201,6 +206,8 @@ Date rules:
 - "আগামীকাল" / "tomorrow" → use the tomorrow_date value provided
 - "পরশু" / "day after tomorrow" → use the day_after_date value provided
 - "আজ" / "today" → use the today_date value provided
+- Day of week names → output the English weekday name in UPPERCASE: "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"
+  Bengali: সোমবার→MONDAY, মঙ্গলবার→TUESDAY, বুধবার→WEDNESDAY, বৃহস্পতিবার→THURSDAY, শুক্রবার→FRIDAY, শনিবার→SATURDAY, রবিবার→SUNDAY
 - Any other relative phrase, resolve to YYYY-MM-DD
 
 Time rules:
