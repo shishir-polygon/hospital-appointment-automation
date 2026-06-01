@@ -1,0 +1,60 @@
+# ═══════════════════════════════════════════════
+#  AI Doctor Booking — .gitignore
+# ═══════════════════════════════════════════════
+
+# ── Secrets (never commit) ──────────────────────
+.env
+.env.local
+.env.production
+backend/.env
+ai-service/.env
+
+# ── Laravel ─────────────────────────────────────
+backend/vendor/
+backend/node_modules/
+backend/storage/logs/*.log
+backend/storage/framework/cache/data/
+backend/storage/framework/sessions/
+backend/storage/framework/views/
+backend/bootstrap/cache/*.php
+backend/.phpunit.result.cache
+backend/public/hot
+backend/public/storage
+
+# ── Next.js ─────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+frontend/.env*.local
+
+# ── Python AI Service ───────────────────────────
+ai-service/venv/
+ai-service/__pycache__/
+ai-service/**/__pycache__/
+ai-service/**/*.pyc
+ai-service/.pytest_cache/
+
+# ── Docker data ──────────────────────────────────
+postgres_data/
+redis_data/
+
+# ── TTS cache ────────────────────────────────────
+/tmp/tts_cache/
+
+# ── OS / Editor ─────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*.orig
+
+# ── Logs ────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-error.log
+
+# ── SSL certs ────────────────────────────────────
+nginx/ssl/
